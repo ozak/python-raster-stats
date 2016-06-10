@@ -1,8 +1,8 @@
-pyshp>=1.1.4
-pytest
-fiona
+# https://github.com/pytest-dev/pytest/issues/1043 and 1032
+pytest<2.8
+
 coverage
 simplejson
-git+https://github.com/geopandas/geopandas.git@3b7afba679387b6363b#egg=geopandas
 git+git://github.com/mverteuil/pytest-ipdb.git
-git+git://github.com/ozak/georasters.git
+twine
+numpydoc

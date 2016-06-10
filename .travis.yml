@@ -1,37 +1,24 @@
-# Check on http://lint.travis-ci.org/ after modifying it!
-# See https://gist.github.com/dan-blanchard/7045057
-# and https://github.com/Jorge-C/ordination/blob/master/.travis.yml
 language: python
+sudo: false
+cache:
+  directories:
+    - ~/.cache/pip
+env:
+  global:
+    - PIP_WHEEL_DIR=$HOME/.cache/pip/wheels
+    - PIP_FIND_LINKS=file://$HOME/.cache/pip/wheels
+addons:
+  apt:
+    packages:
+    - libgdal1h
+    - gdal-bin
+    - libgdal-dev
 python:
   - "2.7"
   - "3.4"
 before_install:
-  - sudo apt-get update
-  # - sudo apt-get install libgdal-dev gdal-bin
-  # You may want to periodically update this, although the conda update
-  # conda line below will keep everything up-to-date.  We do this
-  # conditionally because it saves us some downloading if the version is
-  # the same.
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-      wget http://repo.continuum.io/miniconda/Miniconda-3.9.1-Linux-x86_64.sh -O miniconda.sh;
-    else
-      wget http://repo.continuum.io/miniconda/Miniconda3-3.9.1-Linux-x86_64.sh -O miniconda.sh;
-    fi
-  - bash miniconda.sh -b -p $HOME/miniconda
-  - export PATH="$HOME/miniconda/bin:$PATH"
-  - hash -r
-  - conda config --set always_yes yes --set changeps1 no
-  - conda update -q conda
-  # Useful for debugging any issues with conda
-  - conda info -a
-  - sudo rm -rf /dev/shm
-  - sudo ln -s /run/shm /dev/shm
-env:
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-      GDAL_DATA=/Users/mperry/miniconda/envs/env_name/share/gdal
-    else
-      GDAL_DATA=/Users/mperry/miniconda3/envs/env_name/share/gdal
-    fi
+  - pip install -U pip setuptools --upgrade
+  - pip install wheel
 install:
   # See https://gist.github.com/sgillies/f7bfff349a676cffb1ef
   - conda create --yes -n env_name -c PinguCarsti python=$TRAVIS_PYTHON_VERSION pip cython numpy matplotlib pandas "gdal<2.0" gdal-data scipy
@@ -43,5 +30,10 @@ install:
   - "pip install -r requirements.txt"
   - "pip install -r requirements_dev.txt"
 script: "coverage run --source=rasterstats --include *rasterstats* setup.py test"
+  - pip install numpy>=1.9 Cython
+  - pip install -r requirements_dev.txt
+  - pip install coveralls
+  - pip install -e .
+script: "coverage run --include *rasterstats* setup.py test"
 after_success:
   - coveralls

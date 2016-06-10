@@ -1,19 +1,14 @@
 # test zonal stats
 import os
 import pytest
-import shapefile
 import simplejson
 import json
 import sys
 import numpy as np
 import rasterio
-from osgeo import ogr
 from rasterstats import zonal_stats, raster_stats
-from rasterstats.main import VALID_STATS
-from rasterstats.utils import shapely_to_ogr_type, parse_geo, get_ogr_ds, \
-                              OGRError, feature_to_geojson, stats_to_csv, \
-                              bbox_to_pixel_offsets, get_percentile
-from shapely.geometry import shape, box
+from rasterstats.utils import VALID_STATS
+from rasterstats.io import read_featurecollection, read_features
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,11 +19,12 @@ raster = os.path.join(DATA, 'slope.tif')
 def test_main():
     polygons = os.path.join(DATA, 'polygons.shp')
     stats = zonal_stats(polygons, raster)
-    for key in ['__fid__', 'count', 'min', 'max', 'mean']:
+    for key in ['count', 'min', 'max', 'mean']:
         assert key in stats[0]
     assert len(stats) == 2
     assert stats[0]['count'] == 75
     assert stats[1]['count'] == 50
+    assert round(stats[0]['mean'], 2) == 14.66
 
 
 def test_zonal_global_extent():
@@ -38,17 +34,9 @@ def test_zonal_global_extent():
     assert stats == global_stats
 
 
-# Invalid test, New global_src_extent strategy does not require ogr layer
-# def test_global_non_ogr():
-#     reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-#     geoms = (x.shape for x in reader.shapeRecords())
-#     with pytest.raises(RasterStatsError):
-#         zonal_stats(geoms, raster, global_src_extent=True)
-
-
 def test_zonal_nodata():
     polygons = os.path.join(DATA, 'polygons.shp')
-    stats = zonal_stats(polygons, raster, nodata_value=0)
+    stats = zonal_stats(polygons, raster, nodata=0)
     assert len(stats) == 2
     assert stats[0]['count'] == 75
     assert stats[1]['count'] == 50
@@ -124,89 +112,6 @@ def test_multipoints():
     assert stats[0]['count'] == 3
 
 
-# Geo interface
-def test_iterable_geoms_geo():
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    geoms = (x.shape for x in reader.shapeRecords())
-    stats = zonal_stats(geoms, raster)
-    assert len(stats) == 2
-    assert stats[0]['count'] == 75
-    assert stats[1]['count'] == 50
-
-
-def test_iterable_features_geo():
-    # pyshp doesnt do feature-level geo_interface so we need to construct it
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    features = []
-
-    class FeatureThing(object):
-        pass
-
-    fields = reader.fields[1:]
-    field_names = [field[0] for field in fields]
-    for sr in reader.shapeRecords():
-        geom = sr.shape.__geo_interface__
-        atr = dict(list(zip(field_names, sr.record)))
-        obj = FeatureThing()
-        obj.__geo_interface__ = dict(geometry=geom, properties=atr,
-                                     type="Feature")
-        features.append(obj)
-    stats = zonal_stats(features, raster)
-    assert len(stats) == 2
-    assert stats[0]['count'] == 75
-    assert stats[1]['count'] == 50
-
-
-def test_single_geo():
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    geoms = [x.shape for x in reader.shapeRecords()]
-    stats = zonal_stats(geoms[0], raster)
-    assert len(stats) == 1
-    assert stats[0]['count'] == 75
-
-
-def test_single_geolike():
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    geoms = [x.shape.__geo_interface__ for x in reader.shapeRecords()]
-    stats = zonal_stats(geoms[0], raster)
-    assert len(stats) == 1
-    assert stats[0]['count'] == 75
-
-
-def test_iterable_geolike():
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    geoms = [x.shape.__geo_interface__ for x in reader.shapeRecords()]
-    stats = zonal_stats(geoms, raster)
-    assert len(stats) == 2
-    assert stats[0]['count'] == 75
-    assert stats[1]['count'] == 50
-
-
-def test_single_wkt():
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    geoms = [shape(x.shape).wkt for x in reader.shapeRecords()]
-    stats = zonal_stats(geoms[0], raster)
-    assert len(stats) == 1
-    assert stats[0]['count'] == 75
-
-
-def test_single_wkb():
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    geoms = [shape(x.shape).wkb for x in reader.shapeRecords()]
-    stats = zonal_stats(geoms[0], raster)
-    assert len(stats) == 1
-    assert stats[0]['count'] == 75
-
-
-def test_single_jsonstr():
-    reader = shapefile.Reader(os.path.join(DATA, 'polygons.shp'))
-    geoms = [json.dumps(x.shape.__geo_interface__) for x in reader.shapeRecords()]
-    stats = zonal_stats(geoms[0], raster)
-    assert len(stats) == 1
-    assert stats[0]['count'] == 75
-
-
-# Categorical
 def test_categorical():
     polygons = os.path.join(DATA, 'polygons.shp')
     categorical_raster = os.path.join(DATA, 'slope_classes.tif')
@@ -216,73 +121,37 @@ def test_categorical():
     assert 5.0 in stats[1]
 
 
-# Utils
-def test_nopoints():
-    with pytest.raises(TypeError):
-        shapely_to_ogr_type('Point')
-    with pytest.raises(TypeError):
-        shapely_to_ogr_type('MultiPoint')
-
-
-def test_jsonstr():
-    jsonstr = '''
-    {"type": "Polygon", "coordinates": [[
-    [244697.45179524383, 1000369.2307574936],
-    [244827.15493968062, 1000373.0455558595],
-    [244933.9692939227, 1000353.9715640305],
-    [244933.9692939227, 1000353.9715640305],
-    [244930.15449555693, 1000147.9724522779],
-    [244697.45179524383, 1000159.4168473752],
-    [244697.45179524383, 1000369.2307574936]
-    ]]}'''
-    assert parse_geo(jsonstr)
-
-
-def test_ogr_ds_nonstring():
-    a = box(0, 1, 2, 3)
-    with pytest.raises(OGRError):
-        get_ogr_ds(a)
-
-
-def test_ogr_geojson():
+def test_categorical_map():
     polygons = os.path.join(DATA, 'polygons.shp')
-    ds = ogr.Open(polygons)
-    lyr = ds.GetLayer(0)
-    feat = lyr.GetNextFeature()
-    res = feature_to_geojson(feat)
-    assert res['type'] == 'Feature'
-
-
-def test_ogr_geojson_nogeom():
-    polygons = os.path.join(DATA, 'polygons.shp')
-    ds = ogr.Open(polygons)
-    lyr = ds.GetLayer(0)
-    feat = lyr.GetNextFeature()
-    feat.SetGeometryDirectly(None)
-    res = feature_to_geojson(feat)
-    assert res['type'] == 'Feature'
-    assert res['geometry'] == None
+    categorical_raster = os.path.join(DATA, 'slope_classes.tif')
+    catmap = {5.0: 'cat5'}
+    stats = zonal_stats(polygons, categorical_raster,
+                        categorical=True, category_map=catmap)
+    assert len(stats) == 2
+    assert stats[0][1.0] == 75
+    assert 5.0 not in stats[1]
+    assert 'cat5' in stats[1]
 
 
 def test_specify_stats_list():
     polygons = os.path.join(DATA, 'polygons.shp')
     stats = zonal_stats(polygons, raster, stats=['min', 'max'])
-    assert sorted(stats[0].keys()) == sorted(['__fid__', 'min', 'max'])
+    assert sorted(stats[0].keys()) == sorted(['min', 'max'])
     assert 'count' not in list(stats[0].keys())
 
 
 def test_specify_all_stats():
     polygons = os.path.join(DATA, 'polygons.shp')
     stats = zonal_stats(polygons, raster, stats='ALL')
-    assert sorted(stats[0].keys()) == sorted(VALID_STATS + ["__fid__"])
+    assert sorted(stats[0].keys()) == sorted(VALID_STATS)
     stats = zonal_stats(polygons, raster, stats='*')
-    assert sorted(stats[0].keys()) == sorted(VALID_STATS + ["__fid__"])
+    assert sorted(stats[0].keys()) == sorted(VALID_STATS)
 
 
 def test_specify_stats_string():
     polygons = os.path.join(DATA, 'polygons.shp')
     stats = zonal_stats(polygons, raster, stats='min max')
-    assert sorted(stats[0].keys()) == sorted(['__fid__', 'min', 'max'])
+    assert sorted(stats[0].keys()) == sorted(['min', 'max'])
     assert 'count' not in list(stats[0].keys())
 
 
@@ -299,18 +168,6 @@ def test_optional_stats():
     assert stats[0]['min'] <= stats[0]['median'] <= stats[0]['max']
 
 
-def test_no_copy_properties():
-    polygons = os.path.join(DATA, 'polygons.shp')
-    stats = zonal_stats(polygons, raster, copy_properties=False)  # default
-    assert 'id' not in stats[0]  # attr from original shp
-
-
-def test_copy_properties():
-    polygons = os.path.join(DATA, 'polygons.shp')
-    stats = zonal_stats(polygons, raster, copy_properties=True)
-    assert 'id' in stats[0]  # attr from original shp
-
-
 def test_range():
     polygons = os.path.join(DATA, 'polygons.shp')
     stats = zonal_stats(polygons, raster, stats="range min max")
@@ -323,27 +180,12 @@ def test_range():
     assert ranges == [x['range'] for x in stats]
 
 
-def test_csv():
-    polygons = os.path.join(DATA, 'polygons.shp')
-    stats = zonal_stats(polygons, raster, stats="*")
-    csv = stats_to_csv(stats)
-    assert csv.split()[0] == ','.join(sorted(VALID_STATS + ['__fid__']))
-
-
-def test_categorical_csv():
-    polygons = os.path.join(DATA, 'polygons.shp')
-    categorical_raster = os.path.join(DATA, 'slope_classes.tif')
-    stats = zonal_stats(polygons, categorical_raster, categorical=True)
-    csv = stats_to_csv(stats)
-    assert csv.split()[0] == "1.0,2.0,5.0,__fid__"
-
-
-def test_nodata_value():
+def test_nodata():
     polygons = os.path.join(DATA, 'polygons.shp')
     categorical_raster = os.path.join(DATA, 'slope_classes.tif')
     stats = zonal_stats(polygons, categorical_raster, stats="*",
-                        categorical=True, nodata_value=1.0)
-    assert stats[0]['majority'] == None
+                        categorical=True, nodata=1.0)
+    assert stats[0]['majority'] is None
     assert stats[0]['count'] == 0  # no pixels; they're all null
     assert stats[1]['minority'] == 2.0
     assert stats[1]['count'] == 49  # used to be 50 if we allowed 1.0
@@ -363,26 +205,7 @@ def test_no_overlap():
     stats = zonal_stats(polygons, raster, stats="count")
     for res in stats:
         # no polygon should have any overlap
-        assert res['count'] is None
-
-
-def test_bbox_offbyone():
-    # Make sure we don't get the off-by-one error in calculating src offset
-    rgt = (-4418000.0, 250.0, 0.0, 4876500.0, 0.0, -250.0)
-    geom_bounds = [4077943.9961, -3873500.0, 4462000.0055, -3505823.7582]
-    rshape = (37000, 35000)
-    so = bbox_to_pixel_offsets(rgt, geom_bounds, rshape)
-    assert so[1] + so[3] == rshape[1]
-
-    # Another great example
-    # based on https://github.com/perrygeo/python-raster-stats/issues/46
-    rgt = (151.2006, 0.025, 0.0, -25.4896, 0.0, -0.025)
-    geom_bounds = [153.39775866026284, -28.903022885889843,
-                   153.51344076545288, -28.80117672778147]
-    rshape = (92, 135)
-    # should only be 5 pixels wide, not 6 due to rounding errors
-    assert bbox_to_pixel_offsets(rgt, geom_bounds, rshape) == (87, 132, 5, 3)
-
+        assert res['count'] is 0
 
 def test_all_touched():
     polygons = os.path.join(DATA, 'polygons.shp')
@@ -391,53 +214,44 @@ def test_all_touched():
     assert stats[1]['count'] == 73  # 50 if ALL_TOUCHED=False
 
 
-def _get_raster_array_gt(raster):
-    with rasterio.drivers():
-        with rasterio.open(raster, 'r') as src:
-            affine = src.affine
-            gt = affine.to_gdal()
-            arr = src.read(1)
-    return arr, gt
+def test_ndarray_without_affine():
+    with rasterio.open(raster) as src:
+        polygons = os.path.join(DATA, 'polygons.shp')
+        with pytest.raises(ValueError):
+            zonal_stats(polygons, src.read(1))  # needs affine kwarg
 
 
-def test_ndarray_without_transform():
-    arr, gt = _get_raster_array_gt(raster)
-    polygons = os.path.join(DATA, 'polygons.shp')
-    with pytest.raises(ValueError):
-        zonal_stats(polygons, arr)  # needs transform kwarg
-
-
-def test_ndarray_affine():
-    polygons = os.path.join(DATA, 'polygons.shp')
-    arr, gt = _get_raster_array_gt(raster)
-    stats1 = zonal_stats(polygons, arr, transform=gt)
-
-    from affine import Affine
-    atrans = Affine.from_gdal(*gt)
-    stats2 = zonal_stats(polygons, arr, transform=atrans)
-    assert stats1[0]['count'] == stats2[0]['count']
-
-    stats3 = zonal_stats(polygons, arr, affine=gt)
-    assert stats1[0]['count'] == stats3[0]['count']
-
-
-def test_ndarray_nodata():
-    arr, gt = _get_raster_array_gt(raster)
-    polygons = os.path.join(DATA, 'polygons.shp')
-    with pytest.raises(NotImplementedError):
-        zonal_stats(polygons, arr, transform=gt, nodata_value=-999)
+def _assert_dict_eq(a, b):
+    """Assert that dicts a and b similar within floating point precision
+    """
+    err = 1e-5
+    for k in set(a.keys()).union(set(b.keys())):
+        if a[k] == b[k]:
+            continue
+        try:
+            if abs(a[k]-b[k]) > err:
+                raise AssertionError("{}: {} != {}".format(k, a[k], b[k]))
+        except TypeError:  # can't take abs, nan
+            raise AssertionError("{} != {}".format(a[k], b[k]))
 
 
 def test_ndarray():
-    arr, gt = _get_raster_array_gt(raster)
+    with rasterio.open(raster) as src:
+        arr = src.read(1)
+        affine = src.affine
+
     polygons = os.path.join(DATA, 'polygons.shp')
-    stats = zonal_stats(polygons, arr, transform=gt)
-    assert stats == zonal_stats(polygons, raster)
+    stats = zonal_stats(polygons, arr, affine=affine)
+    stats2 = zonal_stats(polygons, raster)
+    for s1, s2 in zip(stats, stats2):
+        _assert_dict_eq(s1, s2)
+    with pytest.raises(AssertionError):
+        _assert_dict_eq(stats[0], stats[1])
     assert stats[0]['count'] == 75
     assert stats[1]['count'] == 50
 
     points = os.path.join(DATA, 'points.shp')
-    stats = zonal_stats(points, arr, transform=gt)
+    stats = zonal_stats(points, arr, affine=affine)
     assert stats == zonal_stats(points, raster)
     assert sum([x['count'] for x in stats]) == 3
     assert round(stats[0]['mean'], 3) == 11.386
@@ -452,56 +266,24 @@ def test_alias():
     pytest.deprecated_call(raster_stats, polygons, raster)
 
 
-def test_featurecollection():
-    from geopandas import GeoDataFrame
-    polygons = os.path.join(DATA, 'polygons.shp')
-    df = GeoDataFrame.from_file(polygons)
-    assert df.__geo_interface__['type'] == 'FeatureCollection'
-
-    stats = zonal_stats(polygons, raster)
-
-    # geointerface featurecollection
-    stats2 = zonal_stats(df, raster)
-    assert stats == stats2
-
-
 def test_add_stats():
-    from geopandas import GeoDataFrame
     polygons = os.path.join(DATA, 'polygons.shp')
-    df = GeoDataFrame.from_file(polygons)
 
     def mymean(x):
         return np.ma.mean(x)
 
-    stats = zonal_stats(df.geometry, raster, add_stats={'mymean': mymean})
+    stats = zonal_stats(polygons, raster, add_stats={'mymean': mymean})
     for i in range(len(stats)):
         assert stats[i]['mean'] == stats[i]['mymean']
 
 
 def test_mini_raster():
-    from geopandas import GeoDataFrame
     polygons = os.path.join(DATA, 'polygons.shp')
-    df = GeoDataFrame.from_file(polygons)
-    stats = zonal_stats(df.geometry, raster, raster_out=True)
-    stats2 = zonal_stats(df.geometry, stats[0]['mini_raster'],
-                         raster_out=True, transform=stats[0]['mini_raster_GT'])
-    assert (stats[0]['mini_raster'] == stats2[0]['mini_raster']).sum() == \
+    stats = zonal_stats(polygons, raster, raster_out=True)
+    stats2 = zonal_stats(polygons, stats[0]['mini_raster_array'],
+                         raster_out=True, affine=stats[0]['mini_raster_affine'])
+    assert (stats[0]['mini_raster_array'] == stats2[0]['mini_raster_array']).sum() == \
         stats[0]['count']
-
-
-def test_get_percentile():
-    assert get_percentile('percentile_0') == 0.0
-    assert get_percentile('percentile_100') == 100.0
-    assert get_percentile('percentile_13.2') == 13.2
-
-    with pytest.raises(ValueError):
-        get_percentile('percentile_101')
-
-    with pytest.raises(ValueError):
-        get_percentile('percentile_-1')
-
-    with pytest.raises(ValueError):
-        get_percentile('percentile_foobar')
 
 
 def test_percentile_good():
@@ -514,13 +296,13 @@ def test_percentile_good():
     assert stats[0]['percentile_50'] <= stats[0]['percentile_90']
 
 
-def test_percentile_nulls():
+def test_percentile_nodata():
     polygons = os.path.join(DATA, 'polygons.shp')
     categorical_raster = os.path.join(DATA, 'slope_classes.tif')
     # By setting nodata to 1, one of our polygons is within the raster extent
     # but has an empty masked array
     stats = zonal_stats(polygons, categorical_raster,
-                        stats=["percentile_90"], nodata_value=1)
+                        stats=["percentile_90"], nodata=1)
     assert 'percentile_90' in stats[0].keys()
     assert [None, 5.0] == [x['percentile_90'] for x in stats]
 
@@ -529,20 +311,6 @@ def test_percentile_bad():
     polygons = os.path.join(DATA, 'polygons.shp')
     with pytest.raises(ValueError):
         zonal_stats(polygons, raster, stats="percentile_101")
-
-def test_mini_raster2():
-    from geopandas import GeoDataFrame
-    polygons = os.path.join(DATA, 'polygons.shp')
-    df = GeoDataFrame.from_file(polygons)
-    stats = zonal_stats(df.geometry, raster, raster_out=True,
-                        opt_georaster=True)
-    stats2 = zonal_stats(df.geometry, stats[0]['mini_raster'].raster.data,
-                         raster_out=True,
-                         transform=stats[0]['mini_raster'].geot,
-                         opt_georaster=True)
-    assert (stats[0]['mini_raster'].raster ==
-            stats2[0]['mini_raster'].raster).sum() == stats[0]['count']
-
 
 def test_json_serializable():
     polygons = os.path.join(DATA, 'polygons.shp')
@@ -555,12 +323,98 @@ def test_json_serializable():
     except TypeError:
         pytest.fail("zonal_stats returned a list that wasn't JSON-serializable")
 
-def test_georaster():
-    from geopandas import GeoDataFrame
-    polygons = os.path.join(DATA, 'polygons.shp')
-    df = GeoDataFrame.from_file(polygons)
-    stats = zonal_stats(df.geometry, raster, raster_out=True, opt_georaster=True)
-    stats2=zonal_stats(df.geometry, stats[0]['mini_raster'].raster.data, raster_out=True,
-                        transform=stats[0]['mini_raster'].geot, opt_georaster=True)
-    assert (stats[0]['mini_raster'].raster == stats2[0]['mini_raster'].raster).sum()==stats[0]['count']
 
+def test_direct_features_collections():
+    polygons = os.path.join(DATA, 'polygons.shp')
+    features = read_features(polygons)
+    collection = read_featurecollection(polygons)
+
+    stats_direct = zonal_stats(polygons, raster)
+    stats_features = zonal_stats(features, raster)
+    stats_collection = zonal_stats(collection, raster)
+
+    assert stats_direct == stats_features == stats_collection
+
+
+def test_all_nodata():
+    polygons = os.path.join(DATA, 'polygons.shp')
+    raster = os.path.join(DATA, 'all_nodata.tif')
+    stats = zonal_stats(polygons, raster, stats=['nodata', 'count'])
+    assert stats[0]['nodata'] == 75
+    assert stats[0]['count'] == 0
+    assert stats[1]['nodata'] == 50
+    assert stats[1]['count'] == 0
+
+def test_some_nodata():
+    polygons = os.path.join(DATA, 'polygons.shp')
+    raster = os.path.join(DATA, 'slope_nodata.tif')
+    stats = zonal_stats(polygons, raster, stats=['nodata', 'count'])
+    assert stats[0]['nodata'] == 36
+    assert stats[0]['count'] == 39
+    assert stats[1]['nodata'] == 19
+    assert stats[1]['count'] == 31
+
+def test_some_nodata_ndarray():
+    polygons = os.path.join(DATA, 'polygons.shp')
+    raster = os.path.join(DATA, 'slope_nodata.tif')
+    with rasterio.open(raster) as src:
+        arr = src.read(1)
+        affine = src.affine
+
+    # without nodata
+    stats = zonal_stats(polygons, arr, affine=affine, stats=['nodata', 'count', 'min'])
+    assert stats[0]['min'] == -9999.0
+    assert stats[0]['nodata'] == 0
+    assert stats[0]['count'] == 75
+
+    # with nodata
+    stats = zonal_stats(polygons, arr, affine=affine,
+                        nodata=-9999.0, stats=['nodata', 'count', 'min'])
+    assert stats[0]['min'] >= 0.0
+    assert stats[0]['nodata'] == 36
+    assert stats[0]['count'] == 39
+
+
+def test_transform():
+    with rasterio.open(raster) as src:
+        arr = src.read(1)
+        affine = src.affine
+    polygons = os.path.join(DATA, 'polygons.shp')
+
+    stats = zonal_stats(polygons, arr, affine=affine)
+    stats2 = zonal_stats(polygons, arr, transform=affine.to_gdal())
+    assert stats == stats2
+    pytest.deprecated_call(zonal_stats, polygons, raster, transform=affine.to_gdal())
+
+
+def test_prefix():
+    polygons = os.path.join(DATA, 'polygons.shp')
+    stats = zonal_stats(polygons, raster, prefix="TEST")
+    for key in ['count', 'min', 'max', 'mean']:
+        assert key not in stats[0]
+    for key in ['TESTcount', 'TESTmin', 'TESTmax', 'TESTmean']:
+        assert key in stats[0]
+
+
+def test_geojson_out():
+    polygons = os.path.join(DATA, 'polygons.shp')
+    features = zonal_stats(polygons, raster, geojson_out=True)
+    for feature in features:
+        assert feature['type'] == 'Feature'
+        assert 'id' in feature['properties']  # from orig
+        assert 'count' in feature['properties']  # from zonal stats
+
+# Optional tests
+def test_geodataframe_zonal():
+    polygons = os.path.join(DATA, 'polygons.shp')
+
+    try:
+        import geopandas as gpd
+        df = gpd.read_file(polygons)
+        if not hasattr(df, '__geo_interface__'):
+            pytest.skip("This version of geopandas doesn't support df.__geo_interface__")
+    except ImportError:
+        pytest.skip("Can't import geopands")
+
+    expected = zonal_stats(polygons, raster)
+    assert zonal_stats(df, raster) == expected
