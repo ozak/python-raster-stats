@@ -29,19 +29,20 @@ def zonal_stats(*args, **kwargs):
 
 
 def gen_zonal_stats(
-    vectors, raster,
-    layer=0,
-    band=1,
-    nodata=None,
-    affine=None,
-    stats=None,
-    all_touched=False,
-    categorical=False,
-    category_map=None,
-    add_stats=None,
-    raster_out=False,
-    prefix=None,
-    geojson_out=False, **kwargs):
+        vectors, raster,
+        layer=0,
+        band=1,
+        nodata=None,
+        affine=None,
+        stats=None,
+        all_touched=False,
+        categorical=False,
+        category_map=None,
+        add_stats=None,
+        zone_func=None,
+        raster_out=False,
+        prefix=None,
+        geojson_out=False, **kwargs):
     """Zonal statistics of raster values aggregated to vector geometries.
 
     Parameters
@@ -88,6 +89,9 @@ def gen_zonal_stats(
     add_stats: dict
         with names and functions of additional stats to compute, optional
 
+    zone_func: callable
+        function to apply to zone ndarray prior to computing stats
+
     raster_out: boolean
         Include the masked numpy array for each feature?, optional
 
@@ -125,20 +129,19 @@ def gen_zonal_stats(
         if not affine:
             affine = Affine.from_gdal(*transform)
 
-    ndv = kwargs.get('nodata_value')
-    if ndv:
-        warnings.warn("Use `nodata` instead of `nodata_value`", DeprecationWarning)
-        if not nodata:
-            nodata = ndv
-
     cp = kwargs.get('copy_properties')
     if cp:
         warnings.warn("Use `geojson_out` to preserve feature properties",
                       DeprecationWarning)
 
+    bn = kwargs.get('band_num')
+    if bn:
+        warnings.warn("Use `band` to specify band number", DeprecationWarning)
+        band = band_num
+
     with Raster(raster, affine, nodata, band) as rast:
         features_iter = read_features(vectors, layer)
-        for i, feat in enumerate(features_iter):
+        for _, feat in enumerate(features_iter):
             geom = shape(feat['geometry'])
             
             if 'Point' in geom.type:
@@ -147,20 +150,32 @@ def gen_zonal_stats(
             geom_bounds = tuple(geom.bounds)
             
             fsrc = rast.read(bounds=geom_bounds)
-            
-            # create ndarray of rasterized geometry
+
+            # rasterized geometry
             rv_array = rasterize_geom(geom, like=fsrc, all_touched=all_touched)
-            assert rv_array.shape == fsrc.shape
-            
-            # Mask the source data array with our current feature
-            # we take the logical_not to flip 0<->1 for the correct mask effect
-            # we also mask out nodata values explicitly
+
+            # nodata mask
+            isnodata = (fsrc.array == fsrc.nodata)
+
+            # add nan mask (if necessary)
+            if np.issubdtype(fsrc.array.dtype, float) and \
+               np.isnan(fsrc.array.min()):
+                isnodata = (isnodata | np.isnan(fsrc.array))
+
+            # Mask the source data array
+            # mask everything that is not a valid value or not within our geom
             masked = np.ma.MaskedArray(
                 fsrc.array,
-                mask=np.logical_or(
-                    fsrc.array == fsrc.nodata,
-                    np.logical_not(rv_array)))
-            
+                mask=(isnodata | ~rv_array))
+
+            # execute zone_func on masked zone ndarray
+            if zone_func is not None:
+                if not callable(zone_func):
+                    raise TypeError(('zone_func must be a callable '
+                                     'which accepts function a '
+                                     'single `zone_array` arg.'))
+                zone_func(masked)
+
             if masked.compressed().size == 0:
                 # nothing here, fill with None and move on
                 feature_stats = dict([(stat, None) for stat in stats])
@@ -170,8 +185,9 @@ def gen_zonal_stats(
                 if run_count:
                     keys, counts = np.unique(masked.compressed(), return_counts=True)
                     pixel_count = dict(zip([np.asscalar(k) for k in keys],
-                                       [np.asscalar(c) for c in counts]))
-                
+                                           [np.asscalar(c) for c in counts]))
+
+
                 if categorical:
                     feature_stats = dict(pixel_count)
                     if category_map:
@@ -222,7 +238,8 @@ def gen_zonal_stats(
             
             if add_stats is not None:
                 for stat_name, stat_func in add_stats.items():
-                        feature_stats[stat_name] = stat_func(masked)
+                    feature_stats[stat_name] = stat_func(masked)
+
             if raster_out:
                 feature_stats['mini_raster_array'] = masked
                 feature_stats['mini_raster_affine'] = fsrc.affine

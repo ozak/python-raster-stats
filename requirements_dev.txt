@@ -1,8 +1,9 @@
 # https://github.com/pytest-dev/pytest/issues/1043 and 1032
-pytest<2.8
+pytest>=3.0
 
 coverage
 simplejson
 git+git://github.com/mverteuil/pytest-ipdb.git
 twine
 numpydoc
+pytest-cov
