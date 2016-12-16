@@ -140,18 +140,18 @@ def gen_zonal_stats(
         features_iter = read_features(vectors, layer)
         for i, feat in enumerate(features_iter):
             geom = shape(feat['geometry'])
-
+            
             if 'Point' in geom.type:
                 geom = boxify_points(geom, rast)
-
+                
             geom_bounds = tuple(geom.bounds)
-
+            
             fsrc = rast.read(bounds=geom_bounds)
-
+            
             # create ndarray of rasterized geometry
             rv_array = rasterize_geom(geom, like=fsrc, all_touched=all_touched)
             assert rv_array.shape == fsrc.shape
-
+            
             # Mask the source data array with our current feature
             # we take the logical_not to flip 0<->1 for the correct mask effect
             # we also mask out nodata values explicitly
@@ -160,7 +160,7 @@ def gen_zonal_stats(
                 mask=np.logical_or(
                     fsrc.array == fsrc.nodata,
                     np.logical_not(rv_array)))
-
+            
             if masked.compressed().size == 0:
                 # nothing here, fill with None and move on
                 feature_stats = dict([(stat, None) for stat in stats])
@@ -171,14 +171,14 @@ def gen_zonal_stats(
                     keys, counts = np.unique(masked.compressed(), return_counts=True)
                     pixel_count = dict(zip([np.asscalar(k) for k in keys],
                                        [np.asscalar(c) for c in counts]))
-
+                
                 if categorical:
                     feature_stats = dict(pixel_count)
                     if category_map:
                         feature_stats = remap_categories(category_map, feature_stats)
                 else:
                     feature_stats = {}
-
+                
                 if 'min' in stats:
                     feature_stats['min'] = float(masked.min())
                 if 'max' in stats:
@@ -210,16 +210,16 @@ def gen_zonal_stats(
                     except KeyError:
                         rmax = float(masked.max())
                     feature_stats['range'] = rmax - rmin
-
+                
                 for pctile in [s for s in stats if s.startswith('percentile_')]:
                     q = get_percentile(pctile)
                     pctarr = masked.compressed()
                     feature_stats[pctile] = np.percentile(pctarr, q)
-
+            
             if 'nodata' in stats:
                 featmasked = np.ma.MaskedArray(fsrc.array, mask=np.logical_not(rv_array))
                 feature_stats['nodata'] = float((featmasked == fsrc.nodata).sum())
-
+            
             if add_stats is not None:
                 for stat_name, stat_func in add_stats.items():
                         feature_stats[stat_name] = stat_func(masked)
@@ -227,14 +227,14 @@ def gen_zonal_stats(
                 feature_stats['mini_raster_array'] = masked
                 feature_stats['mini_raster_affine'] = fsrc.affine
                 feature_stats['mini_raster_nodata'] = fsrc.nodata
-
+            
             if prefix is not None:
                 prefixed_feature_stats = {}
                 for key, val in feature_stats.items():
                     newkey = "{}{}".format(prefix, key)
                     prefixed_feature_stats[newkey] = val
                 feature_stats = prefixed_feature_stats
-
+            
             if geojson_out:
                 for key, val in feature_stats.items():
                     if 'properties' not in feat:
