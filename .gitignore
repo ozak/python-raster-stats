@@ -16,3 +16,6 @@ Vagrantfile
 .idea
 venv
 .eggs
+anaconda-dist/linux-*
+anaconda-dist/win-*
+anaconda-dist/osx-*
