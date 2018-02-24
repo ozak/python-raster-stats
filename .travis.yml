@@ -7,31 +7,16 @@ env:
   global:
     - PIP_WHEEL_DIR=$HOME/.cache/pip/wheels
     - PIP_FIND_LINKS=file://$HOME/.cache/pip/wheels
-addons:
-  apt:
-    packages:
-    - libgdal1h
-    - gdal-bin
-    - libgdal-dev
 python:
-  - "2.7"
-  - "3.4"
-  - "3.5"
+  - 2.7
+  - 3.4
+  - 3.5
+  - 3.6
 before_install:
   - pip install -U pip setuptools --upgrade
   - pip install wheel
 install:
-  # See https://gist.github.com/sgillies/f7bfff349a676cffb1ef
-  - conda create --yes -n env_name -c PinguCarsti python=$TRAVIS_PYTHON_VERSION pip cython numpy matplotlib pandas "gdal<2.0" gdal-data scipy
-  - source activate env_name
-  - GDAL_CONFIG=`which gdal-config` pip install rasterio
-  - if [ ${TRAVIS_PYTHON_VERSION:0:1} == "2" ]; then conda install --yes imaging; else pip install pillow; fi
-  - pip install pytest  # not yet available for py3 in anaconda
-  - python setup.py install
-  - "pip install -r requirements.txt"
-  - "pip install -r requirements_dev.txt"
-script: "coverage run --source=rasterstats --include *rasterstats* setup.py test"
-  - pip install numpy>=1.9 Cython
+  - pip install numpy "rasterio>=1.0a12"
   - pip install -r requirements_dev.txt
   - pip install coveralls
   - pip install -e .
